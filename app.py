@@ -1,5 +1,6 @@
 from flask import Flask, render_template_string, request
 import os
+import json
 
 app = Flask(__name__)
 
@@ -7,116 +8,86 @@ HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-<title>Advanced Virtual Electronics Lab</title>
+<title>Pro Circuit Simulator</title>
 
 <style>
 body {
-    margin: 0;
-    font-family: Arial;
-    background: linear-gradient(135deg,#eef7f0,#eaf3ff);
+    margin:0;
+    font-family:Arial;
+    background:#f0f4f8;
+}
+
+.dark {
+    background:#121212;
+    color:white;
 }
 
 header {
+    padding:15px;
     text-align:center;
-    padding:20px;
-    background:#12343b;
+    background:#2f7d59;
     color:white;
 }
 
 .container {
-    max-width:1200px;
-    margin:auto;
-    padding:20px;
     display:grid;
     grid-template-columns:1fr 2fr;
     gap:20px;
+    padding:20px;
 }
 
 .card {
     background:white;
     padding:20px;
-    border-radius:12px;
-    box-shadow:0 10px 30px rgba(0,0,0,0.1);
+    border-radius:10px;
 }
 
-input,select,button {
-    width:100%;
-    padding:10px;
-    margin-top:10px;
-}
-
-button {
-    background:#2f7d59;
-    color:white;
-    border:none;
+.dark .card {
+    background:#1e1e1e;
 }
 
 .circuit {
     position:relative;
-    height:350px;
-    background:#f9fdf9;
-    border:2px solid #ccc;
+    height:400px;
+    border:2px dashed #aaa;
 }
 
-/* wires */
-.wire { position:absolute; background:#555; }
-.top { top:20%; left:20%; right:20%; height:6px; }
-.bottom { bottom:20%; left:20%; right:20%; height:6px; }
-.left { left:20%; top:20%; bottom:20%; width:6px; }
-.right { right:20%; top:20%; bottom:20%; width:6px; }
-
-/* components */
-.part {
+.component {
     position:absolute;
-    background:white;
+    padding:10px;
     border-radius:8px;
-    text-align:center;
+    cursor:grab;
     font-size:12px;
+    text-align:center;
 }
 
-.battery { top:5%; left:45%; width:100px; height:50px; border:2px solid blue; }
-.resistor { top:18%; left:45%; width:120px; height:40px; background:#f3c66d; }
-.ammeter { bottom:5%; left:45%; width:100px; height:50px; border:2px solid teal; }
-
+.battery { background:#4da3ff; }
+.resistor { background:#f3c66d; }
 .led {
-    right:18%;
-    top:50%;
+    background:red;
+    border-radius:50%;
     width:60px;
     height:60px;
-    border-radius:50%;
-    background:red;
-    transform:translateY(-50%);
     opacity:{{led_opacity}};
     box-shadow:0 0 {{glow}}px red;
-    transition:all 0.4s ease;
 }
 
-.results {
-    display:grid;
-    grid-template-columns:repeat(3,1fr);
-    gap:10px;
-    margin-top:15px;
+/* connection nodes */
+.node {
+    width:10px;
+    height:10px;
+    background:black;
+    position:absolute;
+    border-radius:50%;
+    cursor:pointer;
 }
 
-.result {
-    background:#eef7f0;
-    padding:10px;
-    text-align:center;
-}
-
-.status {
-    margin-top:15px;
-    padding:10px;
-    background:#f0f5f2;
-}
-
-canvas {
-    margin-top:20px;
-    width:100%;
-}
-
-@media(max-width:800px){
-    .container{grid-template-columns:1fr;}
+/* wire */
+.wire {
+    position:absolute;
+    height:3px;
+    background:black;
+    transform-origin:left center;
 }
 </style>
 
@@ -125,82 +96,120 @@ canvas {
 <body>
 
 <header>
-<h1>Advanced Electronics Lab</h1>
-<p>Interactive Circuit Simulator</p>
+<h1>Pro Circuit Simulator</h1>
+<button onclick="toggleDark()">Dark Mode</button>
+<button onclick="saveCircuit()">Save</button>
+<button onclick="loadCircuit()">Load</button>
 </header>
 
 <div class="container">
 
 <div class="card">
-<h2>Controls</h2>
-
 <form method="POST">
-Voltage (V)
-<input type="number" name="voltage" value="{{voltage}}" step="0.1">
-
-Resistance (Ω)
+Voltage
+<input type="number" name="voltage" value="{{voltage}}">
+Resistance
 <input type="number" name="resistance" value="{{resistance}}">
-
-Power
-<select name="power">
-<option value="on">ON</option>
-<option value="off">OFF</option>
-</select>
-
-<button>Run Simulation</button>
+<button>Simulate</button>
 </form>
+
+<p>{{observation}}</p>
 </div>
 
 <div class="card">
+<div class="circuit" id="circuit">
 
-<h2>Circuit</h2>
-
-<div class="circuit">
-<div class="wire top"></div>
-<div class="wire bottom"></div>
-<div class="wire left"></div>
-<div class="wire right"></div>
-
-<div class="part battery">Battery<br>{{voltage}}V</div>
-<div class="part resistor">Resistor<br>{{resistance}}Ω</div>
-<div class="part ammeter">Ammeter<br>{{current_ma}}mA</div>
-
-<div class="led"></div>
+<div class="component battery" style="top:40px;left:40px;">
+Battery
+<div class="node" id="b1" style="top:-5px;left:20px;" onclick="connect(this)"></div>
+<div class="node" id="b2" style="bottom:-5px;left:20px;" onclick="connect(this)"></div>
 </div>
 
-<div class="results">
-<div class="result">Voltage {{voltage}}V</div>
-<div class="result">Current {{current_ma}}mA</div>
-<div class="result">Power {{power_mw}}mW</div>
+<div class="component resistor" style="top:150px;left:200px;">
+Resistor
+<div class="node" id="r1" style="top:-5px;left:30px;" onclick="connect(this)"></div>
+<div class="node" id="r2" style="bottom:-5px;left:30px;" onclick="connect(this)"></div>
 </div>
 
-<div class="status">
-{{observation}}
+<div class="component led" style="top:250px;left:400px;">
+<div class="node" id="l1" style="top:-5px;left:25px;" onclick="connect(this)"></div>
+<div class="node" id="l2" style="bottom:-5px;left:25px;" onclick="connect(this)"></div>
 </div>
 
-<canvas id="graph"></canvas>
-
+</div>
 </div>
 
 </div>
 
 <script>
-const ctx = document.getElementById('graph').getContext('2d');
-
-new Chart(ctx,{
-type:'line',
-data:{
-labels:[0,2,4,6,8,10],
-datasets:[{
-label:'Current vs Voltage',
-data:{{graph_data}},
-borderWidth:2
-}]
+// DARK MODE
+function toggleDark(){
+    document.body.classList.toggle("dark");
 }
-});
-</script>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+// DRAG
+let selected=null;
+document.querySelectorAll('.component').forEach(el=>{
+    el.onmousedown=()=>selected=el;
+});
+document.onmouseup=()=>selected=null;
+document.onmousemove=e=>{
+    if(selected){
+        selected.style.left=e.pageX-50+'px';
+        selected.style.top=e.pageY-80+'px';
+    }
+};
+
+// CONNECTION SYSTEM
+let connections=[];
+let firstNode=null;
+
+function connect(node){
+    if(!firstNode){
+        firstNode=node;
+        node.style.background="yellow";
+    }else{
+        connections.push([firstNode.id,node.id]);
+        drawWire(firstNode,node);
+        firstNode.style.background="black";
+        firstNode=null;
+    }
+}
+
+function drawWire(a,b){
+    let wire=document.createElement("div");
+    wire.className="wire";
+
+    let x1=a.getBoundingClientRect().left;
+    let y1=a.getBoundingClientRect().top;
+    let x2=b.getBoundingClientRect().left;
+    let y2=b.getBoundingClientRect().top;
+
+    let length=Math.hypot(x2-x1,y2-y1);
+    let angle=Math.atan2(y2-y1,x2-x1)*180/Math.PI;
+
+    wire.style.width=length+"px";
+    wire.style.left=x1+"px";
+    wire.style.top=y1+"px";
+    wire.style.transform="rotate("+angle+"deg)";
+
+    document.body.appendChild(wire);
+}
+
+// SAVE / LOAD
+function saveCircuit(){
+    localStorage.setItem("circuit",JSON.stringify(connections));
+    alert("Saved!");
+}
+
+function loadCircuit(){
+    let data=JSON.parse(localStorage.getItem("circuit"));
+    if(data){
+        connections=data;
+        alert("Loaded!");
+    }
+}
+</script>
 
 </body>
 </html>
@@ -208,47 +217,36 @@ borderWidth:2
 
 @app.route("/", methods=["GET","POST"])
 def lab():
-    voltage = 9
-    resistance = 500
-    power_on = True
+    voltage=9
+    resistance=500
 
-    if request.method == "POST":
-        voltage = float(request.form["voltage"])
-        resistance = float(request.form["resistance"])
-        power_on = request.form.get("power") == "on"
+    if request.method=="POST":
+        voltage=float(request.form["voltage"])
+        resistance=float(request.form["resistance"])
 
-    current = (voltage/resistance) if power_on else 0
-    current_ma = current*1000
-    power_mw = voltage*current*1000
+    current=voltage/resistance if resistance else 0
+    current_ma=current*1000
 
-    if not power_on:
-        brightness = 0
-        observation="Circuit OFF"
-    elif voltage < 2:
-        brightness = 0
-        observation="Voltage too low"
-    elif current_ma < 8:
-        brightness = 0.3
-        observation="Dim LED"
-    elif current_ma <= 25:
-        brightness = 0.7
-        observation="Normal operation"
+    if voltage<2:
+        brightness=0
+        observation="LED OFF"
+    elif current_ma<8:
+        brightness=0.3
+        observation="Dim"
+    elif current_ma<=25:
+        brightness=0.7
+        observation="Normal"
     else:
-        brightness = 1
+        brightness=1
         observation="Too much current!"
-
-    graph_data = [round((v/resistance)*1000,2) for v in [0,2,4,6,8,10]]
 
     return render_template_string(
         HTML,
         voltage=voltage,
         resistance=resistance,
-        current_ma=round(current_ma,2),
-        power_mw=round(power_mw,2),
         observation=observation,
         led_opacity=0.2+brightness*0.8,
-        glow=10+brightness*50,
-        graph_data=graph_data
+        glow=10+brightness*50
     )
 
 if __name__=="__main__":
